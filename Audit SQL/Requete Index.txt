@@ -1,0 +1,465 @@
+********** FK sans index 
+
+SELECT 
+   Object_Name(a.parent_object_id) AS Table_Name
+   ,b.NAME AS Column_Name
+FROM 
+   sys.foreign_key_columns a
+   ,sys.all_columns b
+   ,sys.objects c
+WHERE 
+   a.parent_column_id = b.column_id
+   AND a.parent_object_id = b.object_id
+   AND b.object_id = c.object_id
+   AND c.is_ms_shipped = 0
+     -- and Object_Name(a.parent_object_id) = 'T_CENTRE_CNT'
+EXCEPT
+SELECT 
+   Object_name(a.Object_id)
+   ,b.NAME
+FROM 
+   sys.index_columns a
+   ,sys.all_columns b
+   ,sys.objects c
+WHERE 
+   a.object_id = b.object_id
+   AND a.key_ordinal = 1
+   AND a.column_id = b.column_id
+   AND a.object_id = c.object_id
+   AND c.is_ms_shipped = 0
+
+GO   
+
+/****************************************************************
+Renvoie les missing + REquete et le plan d'execution dans son plan cache
+
+****************************************************************/
+
+WITH XMLNAMESPACES
+   (DEFAULT 'http://schemas.microsoft.com/sqlserver/2004/07/showplan')
+ 
+SELECT query_plan,
+       n.value('(@StatementText)[1]', 'VARCHAR(4000)') AS sql_text,
+       n.value('(//MissingIndexGroup/@Impact)[1]', 'FLOAT') AS impact,
+       DB_ID(REPLACE(REPLACE(n.value('(//MissingIndex/@Database)[1]', 'VARCHAR(max)'),'[',''),']','')) AS database_id,
+       OBJECT_ID(n.value('(//MissingIndex/@Database)[1]', 'VARCHAR(max)') + '.' +
+           n.value('(//MissingIndex/@Schema)[1]', 'VARCHAR(max)') + '.' +
+           n.value('(//MissingIndex/@Table)[1]', 'VARCHAR(max)')) AS OBJECT_ID,
+       n.value('(//MissingIndex/@Database)[1]', 'VARCHAR(max)') + '.' +
+           n.value('(//MissingIndex/@Schema)[1]', 'VARCHAR(max)') + '.' +
+           n.value('(//MissingIndex/@Table)[1]', 'VARCHAR(max)')
+       AS statement,
+       (   SELECT DISTINCT c.value('(@Name)[1]', 'VARCHAR(max)') + ', '
+           FROM n.nodes('//ColumnGroup') AS t(cg)
+           CROSS APPLY cg.nodes('Column') AS r(c)
+           WHERE cg.value('(@Usage)[1]', 'VARCHAR(max)') = 'EQUALITY'
+           FOR  XML PATH('')
+       ) AS equality_columns,
+        (  SELECT DISTINCT c.value('(@Name)[1]', 'VARCHAR(max)') + ', '
+           FROM n.nodes('//ColumnGroup') AS t(cg)
+           CROSS APPLY cg.nodes('Column') AS r(c)
+           WHERE cg.value('(@Usage)[1]', 'VARCHAR(max)') = 'INEQUALITY'
+           FOR  XML PATH('')
+       ) AS inequality_columns,
+       (   SELECT DISTINCT c.value('(@Name)[1]', 'VARCHAR(max)') + ', '
+           FROM n.nodes('//ColumnGroup') AS t(cg)
+           CROSS APPLY cg.nodes('Column') AS r(c)
+           WHERE cg.value('(@Usage)[1]', 'VARCHAR(max)') = 'INCLUDE'
+           FOR  XML PATH('')
+       ) AS include_columns
+INTO #MissingIndexInfo
+FROM
+(
+   SELECT query_plan
+   FROM (
+           SELECT DISTINCT plan_handle
+           FROM sys.dm_exec_query_stats WITH(NOLOCK)
+         ) AS qs
+       OUTER APPLY sys.dm_exec_query_plan(qs.plan_handle) tp
+   WHERE tp.query_plan.exist('//MissingIndex')=1
+) AS tab (query_plan)
+CROSS APPLY query_plan.nodes('//StmtSimple') AS q(n)
+WHERE n.exist('QueryPlan/MissingIndexes') = 1;
+ 
+-- Trim trailing comma from lists
+UPDATE #MissingIndexInfo
+SET equality_columns = LEFT(equality_columns,LEN(equality_columns)-1),
+   inequality_columns = LEFT(inequality_columns,LEN(inequality_columns)-1),
+   include_columns = LEFT(include_columns,LEN(include_columns)-1);
+ 
+SELECT *
+FROM #MissingIndexInfo
+
+order by 3 desc
+ 
+DROP TABLE #MissingIndexInfo;
+
+
+
+
+/****************************************************************
+	Renvoie les index les plus volumineux
+
+****************************************************************/
+
+SELECT TOP 100 
+TableName = OBJECT_NAME(ius.[object_id]),
+IndexName = i.name,
+i.indid,
+CAST((8* i.reserved)/1024 AS VARCHAR)AS [Taille en Mo],i.rows,
+          [user_updates] ,[user_seeks] ,[user_scans] ,[last_user_seek] ,[last_user_scan]
+    FROM sysindexes i
+    INNER JOIN sys.dm_db_index_usage_stats ius ON i.id = ius.object_id AND i.indid = ius.index_id
+    WHERE i.dpages > 0 AND 
+          ( ius.user_seeks > 2 OR
+            ius.user_scans > 2 )
+    ORDER BY i.dpages DESC
+
+/****************************************************************
+	Split de pages pour determiner le fillfactor
+
+****************************************************************/
+
+SELECT object_name(s.object_id) as tbl, 
+       i.name as idx, 
+       range_scan_count + singleton_lookup_count as [pages lues],
+       leaf_insert_count+leaf_update_count+ leaf_delete_count 
+         as [écritures sur noeud feuille],
+       leaf_allocation_count as [page splits sur noeud feuille],
+       nonleaf_insert_count + nonleaf_update_count + 
+         nonleaf_delete_count as [écritures sur noeuds intermédiaires],
+       nonleaf_allocation_count 
+         as [page splits sur noeuds intermédiaires]
+FROM sys.dm_db_index_operational_stats (DB_ID(),NULL,NULL,NULL) s
+JOIN sys.indexes i 
+       ON i.object_id = s.object_id and i.index_id = s.index_id
+WHERE objectproperty(s.object_id,'IsUserTable') = 1
+and object_name(s.object_id) ='dif_diffusion'
+ORDER BY 5 DESC;
+GO
+
+/****************************************************************
+	Voir les index a jour et fragmentation
+
+****************************************************************/
+----- user_updates compte le nombre de modif effectuées sur l'index. Autant l'index apporte un gain important s'il est utilisé en seek, 
+--moyen s'il est utilisé en lookup et faible s'il est utilisé en scan, autant un update est toujours pénalisant.
+-- Il faut donc chercher à supprimer les index ayant beaucoup de mise à jour (update) et aucune lecture (seek, lookup et scan).
+--
+SELECT DB_NAME(IUS.database_id) DB, 
+            OBJECT_NAME(IUS.object_id) TABLES,
+            IDX.NAME IndexName,
+            CAST(IPS.avg_fragmentation_in_percent AS NUMERIC(5,2)) Frag,
+            CAST(IPS.avg_page_space_used_in_percent AS NUMERIC(5,2)) PgUsage,
+            IPS.page_count Pg,
+            IDX.fill_factor,
+            IUS.user_seeks,
+            IUS.user_scans,
+            IUS.last_user_scan,
+            IUS.last_user_seek,
+            IUS.user_lookups,
+            IUS.last_user_lookup,
+            IDX.is_hypothetical,
+            IDX.is_padded
+FROM sys.dm_db_index_usage_stats IUS
+JOIN sys.indexes IDX ON IUS.object_id = IDX.object_id
+                             AND IUS.index_id = IDX.index_id
+JOIN sys.dm_db_index_physical_stats(DB_ID(), OBJECT_ID(NULL), NULL, NULL, 'SAMPLED')IPS
+      ON IUS.object_id = IPS.object_id
+      AND IUS.index_id = IPS.index_id
+WHERE OBJECT_NAME(IUS.object_id) NOT LIKE 'sys%'
+AND IPS.index_id > 0
+--and cast(DB as varchar)='SIAV1_FOR01'
+--and  IDX.NAME like '%I_DiffusionChaine_NumEM%'
+--order by 8 desc
+
+--- OU 
+
+SELECT s.name AS TABLE_SCHEMA, o.name AS TABLE_NAME, i.name AS INDEX_NAME, 
+       user_updates, 
+       'DROP INDEX [' + i.name + '] ON [' +s.name +'].[' + o.name +'];' AS DROP_COMMAND
+FROM   sys.dm_db_index_usage_stats AS ius
+       INNER JOIN sys.objects AS o              ON ius.object_id = o.object_id
+             INNER JOIN sys.schemas AS s        ON o.schema_id = s.schema_id
+       INNER JOIN sys.indexes AS i              ON ius.object_id = i.object_id AND
+                                                   ius.index_id = i.index_id
+WHERE  database_id = DB_ID()
+AND    (SELECT sqlserver_start_time 
+        FROM   sys.dm_os_sys_info) < DATEADD(day, -31, CURRENT_TIMESTAMP)
+AND    ius.index_id BETWEEN 2 AND 999
+AND    user_seeks + user_lookups + user_scans = 0
+AND    i.is_primary_key = 0
+AND    i.is_unique = 0
+AND    i.is_unique_constraint = 0;
+
+
+
+/****************************************************************
+			Index non utilisés
+
+****************************************************************/
+
+SELECT top 25
+o.name AS ObjectName
+, i.name AS IndexName
+, i.index_id AS IndexID
+, dm_ius.user_seeks AS UserSeek
+, dm_ius.user_scans AS UserScans
+, dm_ius.user_lookups AS UserLookups
+, dm_ius.user_updates AS UserUpdates
+, p.TableRows
+,dm_ius.last_user_seek as Derniererecherchedeluser
+,dm_ius.last_user_scan as Derniereanalysedeluser
+,dm_ius.database_id as  [database]
+,'DROP INDEX ' + QUOTENAME(i.name)
++ ' ON ' + QUOTENAME(s.name) + '.' + QUOTENAME(OBJECT_NAME(dm_ius.OBJECT_ID)) AS 'drop statement'
+FROM sys.dm_db_index_usage_stats dm_ius
+INNER JOIN sys.indexes i ON i.index_id = dm_ius.index_id AND dm_ius.OBJECT_ID = i.OBJECT_ID
+INNER JOIN sys.objects o ON dm_ius.OBJECT_ID = o.OBJECT_ID
+INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
+INNER JOIN (SELECT SUM(p.rows) TableRows, p.index_id, p.OBJECT_ID
+FROM sys.partitions p GROUP BY p.index_id, p.OBJECT_ID) p
+ON p.index_id = dm_ius.index_id AND dm_ius.OBJECT_ID = p.OBJECT_ID
+WHERE OBJECTPROPERTY(dm_ius.OBJECT_ID,'IsUserTable') = 1
+AND dm_ius.database_id = DB_ID()
+AND i.type_desc = 'nonclustered'
+AND i.is_primary_key = 0
+AND i.is_unique_constraint = 0
+ORDER BY (dm_ius.user_seeks + dm_ius.user_scans + dm_ius.user_lookups) ASC
+GO
+
+
+
+/****************************************************************
+			Index dupliqué
+
+****************************************************************/
+
+WITH MyDuplicate AS (SELECT 
+	Sch.[name] AS SchemaName,
+	Obj.[name] AS TableName,
+	Idx.[name] AS IndexName,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 1) AS Col1,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 2) AS Col2,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 3) AS Col3,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 4) AS Col4,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 5) AS Col5,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 6) AS Col6,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 7) AS Col7,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 8) AS Col8,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 9) AS Col9,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 10) AS Col10,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 11) AS Col11,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 12) AS Col12,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 13) AS Col13,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 14) AS Col14,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 15) AS Col15,
+	INDEX_Col(Sch.[name] + '.' + Obj.[name], Idx.index_id, 16) AS Col16
+FROM sys.indexes Idx
+INNER JOIN sys.objects Obj ON Idx.[object_id] = Obj.[object_id]
+INNER JOIN sys.schemas Sch ON Sch.[schema_id] = Obj.[schema_id]
+WHERE index_id > 0)
+SELECT	MD1.SchemaName, MD1.TableName, MD1.IndexName, 
+		MD2.IndexName AS OverLappingIndex,
+		MD1.Col1, MD1.Col2, MD1.Col3, MD1.Col4, 
+		MD1.Col5, MD1.Col6, MD1.Col7, MD1.Col8, 
+		MD1.Col9, MD1.Col10, MD1.Col11, MD1.Col12, 
+		MD1.Col13, MD1.Col14, MD1.Col15, MD1.Col16
+FROM MyDuplicate MD1
+INNER JOIN MyDuplicate MD2 ON MD1.TableName = MD2.TableName
+	AND MD1.IndexName <> MD2.IndexName
+	AND MD1.Col1 = MD2.Col1
+	AND (MD1.Col2 IS NULL OR MD2.Col2 IS NULL OR MD1.Col2 = MD2.Col2)
+	AND (MD1.Col3 IS NULL OR MD2.Col3 IS NULL OR MD1.Col3 = MD2.Col3)
+	AND (MD1.Col4 IS NULL OR MD2.Col4 IS NULL OR MD1.Col4 = MD2.Col4)
+	AND (MD1.Col5 IS NULL OR MD2.Col5 IS NULL OR MD1.Col5 = MD2.Col5)
+	AND (MD1.Col6 IS NULL OR MD2.Col6 IS NULL OR MD1.Col6 = MD2.Col6)
+	AND (MD1.Col7 IS NULL OR MD2.Col7 IS NULL OR MD1.Col7 = MD2.Col7)
+	AND (MD1.Col8 IS NULL OR MD2.Col8 IS NULL OR MD1.Col8 = MD2.Col8)
+	AND (MD1.Col9 IS NULL OR MD2.Col9 IS NULL OR MD1.Col9 = MD2.Col9)
+	AND (MD1.Col10 IS NULL OR MD2.Col10 IS NULL OR MD1.Col10 = MD2.Col10)
+	AND (MD1.Col11 IS NULL OR MD2.Col11 IS NULL OR MD1.Col11 = MD2.Col11)
+	AND (MD1.Col12 IS NULL OR MD2.Col12 IS NULL OR MD1.Col12 = MD2.Col12)
+	AND (MD1.Col13 IS NULL OR MD2.Col13 IS NULL OR MD1.Col13 = MD2.Col13)
+	AND (MD1.Col14 IS NULL OR MD2.Col14 IS NULL OR MD1.Col14 = MD2.Col14)
+	AND (MD1.Col15 IS NULL OR MD2.Col15 IS NULL OR MD1.Col15 = MD2.Col15)
+	AND (MD1.Col16 IS NULL OR MD2.Col16 IS NULL OR MD1.Col16 = MD2.Col16)
+ORDER BY
+	MD1.SchemaName,MD1.TableName,MD1.IndexName
+
+
+/***************************************************************
+	Script pour detecter les index manquants
+
+****************************************************************/
+
+SELECT TOP 25
+dm_mid.database_id AS DatabaseID, 
+dm_migs.avg_user_impact*(dm_migs.user_seeks+dm_migs.user_scans) Avg_Estimated_Impact,
+dm_migs.last_user_seek AS Last_User_Seek,
+object_name(dm_mid.object_id,dm_mid.database_id) AS [TableName],
+'CREATE INDEX [IX_' + object_name(dm_mid.object_id,dm_mid.database_id) + '_'
++ REPLACE(REPLACE(REPLACE(ISNULL(dm_mid.equality_columns,''),', ','_'),'[',''),']','') +
+CASE
+	WHEN dm_mid.equality_columns IS NOT NULL AND dm_mid.inequality_columns IS NOT NULL THEN '_'
+	ELSE ''
+END
++ REPLACE(REPLACE(REPLACE(ISNULL(dm_mid.inequality_columns,''),', ','_'),'[',''),']','')
++ ']'
++ ' ON ' + dm_mid.statement
++ ' (' + ISNULL (dm_mid.equality_columns,'')
++ CASE WHEN dm_mid.equality_columns IS NOT NULL AND dm_mid.inequality_columns IS NOT NULL THEN ',' ELSE
+'' END
++ ISNULL (dm_mid.inequality_columns, '')
++ ')'
++ ISNULL (' INCLUDE (' + dm_mid.included_columns + ')', '') AS Create_Statement
+FROM sys.dm_db_missing_index_groups dm_mig
+INNER JOIN sys.dm_db_missing_index_group_stats dm_migs
+ON dm_migs.group_handle = dm_mig.index_group_handle
+INNER JOIN sys.dm_db_missing_index_details dm_mid
+ON dm_mig.index_handle = dm_mid.index_handle
+WHERE dm_mid.database_id = DB_ID()
+ORDER BY Avg_Estimated_Impact DESC 
+GO
+
+/***************************************************************
+	mesurer le taux de fragmentation par table
+
+****************************************************************/
+
+select distinct '['+DB_NAME(database_id)+']' as DatabaseName,
+    '['+DB_NAME(database_id)+'].['+sch.name+'].['
+    + OBJECT_NAME(ips.object_id)+']' as TableName,
+    i.name as IndexName,
+    ips.index_type_desc as IndexType,
+    avg_fragmentation_in_percent as avg_fragmentation,
+    SUM(row_count) as Rows
+FROM
+    sys.indexes i INNER JOIN
+    sys.dm_db_index_physical_stats(DB_ID('irim1_pre01'),NULL,NULL,NULL,'LIMITED') ips ON
+        i.object_id = ips.object_id INNER JOIN
+    sys.tables tbl ON tbl.object_id  = ips.object_id INNER JOIN
+    sys.schemas sch ON sch.schema_id = tbl.schema_id INNER JOIN
+    sys.dm_db_partition_stats ps ON ps.object_id = ips.object_id
+WHERE
+    avg_fragmentation_in_percent <> 0.0 
+    AND OBJECT_NAME(ips.object_id) not like '%sys%'
+	and object_name(ips.object_id) like '%dif_diffusion%'
+GROUP BY database_id, sch.name, ips.object_id, avg_fragmentation_in_percent,
+    i.name, ips.index_type_desc
+ORDER BY avg_fragmentation_in_percent desc
+
+/***************************************************************
+	Combien de pages utilises pour chaque index
+
+****************************************************************/
+
+SELECT     o.name AS table_name,
+        p.index_id, 
+        i.name AS index_name, 
+        au.type_desc AS allocation_type, 
+        au.data_pages, partition_number
+FROM     sys.allocation_units AS au
+JOIN     sys.partitions AS p ON au.container_id = p.partition_id
+JOIN     sys.objects AS o ON p.object_id = o.object_id
+LEFT JOIN sys.indexes AS i     ON p.index_id = i.index_id 
+                            AND i.object_id = p.object_id
+WHERE     o.name = N'TransactionHistory'
+ORDER BY o.name, p.index_id
+
+
+/***************************************************************
+	date d'utilisation d'un index et sa taille
+
+****************************************************************/
+
+SELECT TOP 100 
+TableName = OBJECT_NAME(ius.[object_id]),
+IndexName = i.name,
+i.indid,
+CAST((8* i.reserved)/1024 AS VARCHAR)AS [Taille en Mo],i.rows,
+          [user_updates] ,[user_seeks] ,[user_scans] ,[last_user_seek] ,[last_user_scan]
+    FROM sysindexes i
+    INNER JOIN sys.dm_db_index_usage_stats ius ON i.id = ius.object_id AND i.indid = ius.index_id
+    WHERE i.dpages > 0 AND 
+          ( ius.user_seeks > 2 OR
+            ius.user_scans > 2 )
+    ORDER BY i.dpages DESC
+
+
+/***************************************************************
+	Table heap
+
+****************************************************************/
+
+
+SELECT SCH.name + '.' + TBL.name AS TableName 
+FROM sys.tables AS TBL 
+     INNER JOIN sys.schemas AS SCH 
+         ON TBL.schema_id = SCH.schema_id 
+     INNER JOIN sys.indexes AS IDX 
+         ON TBL.object_id = IDX.object_id 
+            AND IDX.type = 0 -- = Heap 
+ORDER BY TableName
+
+/***************************************************************
+	Nbre de lignes par Index + Index utilisées ou pas + SCRIPT INDEX
+
+****************************************************************/.
+
+SELECT top 25
+o.name AS ObjectName
+, i.name AS IndexName
+, i.index_id AS IndexID
+, dm_ius.user_seeks AS UserSeek
+, dm_ius.user_scans AS UserScans
+, dm_ius.user_lookups AS UserLookups
+, dm_ius.user_updates AS UserUpdates
+, p.TableRows
+,dm_ius.last_user_seek as Derniererecherchedeluser
+,dm_ius.last_user_scan as Derniereanalysedeluser
+,dm_ius.database_id as  [database]
+,'DROP INDEX ' + QUOTENAME(i.name)
++ ' ON ' + QUOTENAME(s.name) + '.' + QUOTENAME(OBJECT_NAME(dm_ius.OBJECT_ID)) AS 'drop statement'
+FROM sys.dm_db_index_usage_stats dm_ius
+INNER JOIN sys.indexes i ON i.index_id = dm_ius.index_id AND dm_ius.OBJECT_ID = i.OBJECT_ID
+INNER JOIN sys.objects o ON dm_ius.OBJECT_ID = o.OBJECT_ID
+INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
+INNER JOIN (SELECT SUM(p.rows) TableRows, p.index_id, p.OBJECT_ID
+FROM sys.partitions p GROUP BY p.index_id, p.OBJECT_ID) p
+ON p.index_id = dm_ius.index_id AND dm_ius.OBJECT_ID = p.OBJECT_ID
+WHERE OBJECTPROPERTY(dm_ius.OBJECT_ID,'IsUserTable') = 1
+AND dm_ius.database_id = DB_ID()
+AND i.type_desc = 'nonclustered'
+AND i.is_primary_key = 0
+AND i.is_unique_constraint = 0
+and o.name  in ('MailerTersea')
+
+
+ORDER BY (dm_ius.user_seeks + dm_ius.user_scans + dm_ius.user_lookups) ASC
+GO
+/************************************************************************
+	VA verifier les index qui font le plus de split de pages
+
+**************************************************************************.
+
+SELECT
+
+IOS.INDEX_ID,
+O.NAME AS OBJECT_NAME,
+I.NAME AS INDEX_NAME,
+IOS.LEAF_ALLOCATION_COUNT AS PAGE_SPLIT_FOR_INDEX,
+IOS.NONLEAF_ALLOCATION_COUNT PAGE_ALLOCATION_CAUSED_BY_PAGESPLIT
+FROM SYS.DM_DB_INDEX_OPERATIONAL_STATS(DB_ID(N'PRE_DTM_ADHESION'),NULL,NULL,NULL) IOS
+JOIN
+SYS.INDEXES I
+ON
+IOS.INDEX_ID=I.INDEX_ID
+AND IOS.OBJECT_ID = I.OBJECT_ID
+JOIN
+SYS.OBJECTS O
+ON
+IOS.OBJECT_ID=O.OBJECT_ID
+order by 4 desc
+WHERE O.TYPE_DESC='TF_REN_RENouv'
+

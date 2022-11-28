@@ -1,0 +1,186 @@
+
+----------------------------------------Voir si il y a une attente HDD ---------------------------------------
+
+
+
+select [session_id],wait_duration_ms,wait_type,resource_description
+from sys.dm_os_waiting_tasks
+where wait_type like 'PAGEIOLATCH%' OR wait_type IN ('IO_COMPLETION', 'WRITELOG','ASYNC_IO_COMPLETION')
+
+OU 
+
+select res.scheduler_id,pending_disk_io_count,* 
+from sys.dm_exec_requests res inner join sys.dm_os_schedulers s
+on s.scheduler_id=res.scheduler_id
+where session_id >50
+and pending_disk_io_count >0
+order by 2 desc
+
+-- OU
+
+SELECT vfs.database_id, df.name, df.physical_name
+ ,vfs.FILE_ID, ior.io_pending
+ FROM sys.dm_io_pending_io_requests ior
+ INNER JOIN sys.dm_io_virtual_file_stats (DB_ID(), NULL) vfs
+ ON (vfs.file_handle = ior.io_handle)
+ INNER JOIN sys.database_files df ON (df.FILE_ID = vfs.FILE_ID)
+
+----------------------------------Afficher l'espace utilisé par les data sur le HDD--------------------------------
+
+SELECT name AS [File Name] , physical_name AS [Physical Name], size/128/1000 AS [Total Size in GB],
+size/128.0 - CAST(FILEPROPERTY(name, 'SpaceUsed') AS int)/128 AS [Available Space In MB]
+FROM sys.database_files;
+
+--------------------------------------Quel BDD consomment le plus D'IO disque en pages read et write ? ------------------------------
+
+SELECT SUM(deqs.total_logical_reads) TotalPageReads,
+ SUM(deqs.total_logical_writes) TotalPageWrites,
+ CASE
+ WHEN DB_NAME(dest.dbid) IS NULL THEN 'AdhocSQL'
+ ELSE DB_NAME(dest.dbid) END Databasename
+ FROM sys.dm_exec_query_stats deqs
+ CROSS APPLY sys.dm_exec_sql_text(deqs.sql_handle) AS dest
+ GROUP BY DB_NAME(dest.dbid)
+
+--------------------------------------Quel requete consomme le plus d'IO ? ------------------------------
+
+SELECT TOP 100
+    (total_logical_reads + total_logical_writes) / qs.execution_count AS average_IO,
+    (total_logical_reads + total_logical_writes) AS total_IO,
+    qs.execution_count AS execution_count,
+    SUBSTRING (qt.text,qs.statement_start_offset/2, 
+         (CASE WHEN qs.statement_end_offset = -1 
+            THEN LEN(CONVERT(NVARCHAR(MAX), qt.text)) * 2 
+          ELSE qs.statement_end_offset END - qs.statement_start_offset)/2) AS indivudual_query,
+    o.name AS object_name,
+    DB_NAME(qt.dbid) AS database_name
+  FROM sys.dm_exec_query_stats qs
+    CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) as qt
+    LEFT OUTER JOIN sys.objects o ON qt.objectid = o.object_id
+where qt.dbid = DB_ID()
+  ORDER BY average_IO DESC;
+
+
+--------------------------------------AVG de nombre de lecture ecriture en M/s par BDD ? ------------------------------
+SELECT
+    [ReadLatency/ms] =
+        CASE WHEN [num_of_reads] = 0
+            THEN 0 ELSE ([io_stall_read_ms] / [num_of_reads]) END,
+    [WriteLatency/ms] =
+        CASE WHEN [num_of_writes] = 0
+            THEN 0 ELSE ([io_stall_write_ms] / [num_of_writes]) END,
+    [Latency] =
+        CASE WHEN ([num_of_reads] = 0 AND [num_of_writes] = 0)
+            THEN 0 ELSE ([io_stall] / ([num_of_reads] + [num_of_writes])) END,
+    [AvgBPerRead] =
+        CASE WHEN [num_of_reads] = 0
+            THEN 0 ELSE ([num_of_bytes_read] / [num_of_reads]) END,
+    [AvgBPerWrite] =
+        CASE WHEN [num_of_writes] = 0
+            THEN 0 ELSE ([num_of_bytes_written] / [num_of_writes]) END,
+    [AvgBPerTransfer] =
+        CASE WHEN ([num_of_reads] = 0 AND [num_of_writes] = 0)
+            THEN 0 ELSE
+                (([num_of_bytes_read] + [num_of_bytes_written]) /
+                ([num_of_reads] + [num_of_writes])) END,
+    LEFT ([mf].[physical_name], 2) AS [Drive],
+    DB_NAME ([vfs].[database_id]) AS [DB],
+    [mf].[physical_name]
+FROM
+    sys.dm_io_virtual_file_stats (NULL,NULL) AS [vfs]
+JOIN sys.master_files AS [mf]
+    ON [vfs].[database_id] = [mf].[database_id]
+    AND [vfs].[file_id] = [mf].[file_id]
+where  DB_NAME ([vfs].[database_id]) not in ('master','msdb','model')
+--[vfs].[file_id] = 2 -- log files
+-- ORDER BY [Latency] DESC
+-- ORDER BY [ReadLatency] DESC
+ORDER BY [WriteLatency/ms] DESC;
+GO
+
+
+-- ---------------Get I/O utilization by database (Query 30) (IO Usage By Database)-----------
+
+
+WITH Aggregate_IO_Statistics
+AS
+(SELECT DB_NAME(database_id) AS [Database Name],
+CAST(SUM(num_of_bytes_read + num_of_bytes_written)/1048576 AS DECIMAL(12, 2)) AS io_in_mb
+FROM sys.dm_io_virtual_file_stats(NULL, NULL) AS [DM_IO_STATS]
+GROUP BY database_id)
+SELECT ROW_NUMBER() OVER(ORDER BY io_in_mb DESC) AS [I/O Rank], [Database Name], io_in_mb AS [Total I/O (MB)],
+       CAST(io_in_mb/ SUM(io_in_mb) OVER() * 100.0 AS DECIMAL(5,2)) AS [I/O Percent]
+FROM Aggregate_IO_Statistics
+ORDER BY [I/O Rank] OPTION (RECOMPILE);
+
+-- I/O Statistics by file for the current database  (Query 45) (IO Stats By File)
+
+
+SELECT DB_NAME(DB_ID()) AS [Database Name], df.name AS [Logical Name], vfs.[file_id], 
+df.physical_name AS [Physical Name], vfs.num_of_reads, vfs.num_of_writes, vfs.io_stall_read_ms, vfs.io_stall_write_ms,
+CAST(100. * vfs.io_stall_read_ms/(vfs.io_stall_read_ms + vfs.io_stall_write_ms) AS DECIMAL(10,1)) AS [IO Stall Reads Pct],
+CAST(100. * vfs.io_stall_write_ms/(vfs.io_stall_write_ms + vfs.io_stall_read_ms) AS DECIMAL(10,1)) AS [IO Stall Writes Pct],
+(vfs.num_of_reads + vfs.num_of_writes) AS [Writes + Reads], 
+CAST(vfs.num_of_bytes_read/1048576.0 AS DECIMAL(10, 2)) AS [MB Read], 
+CAST(vfs.num_of_bytes_written/1048576.0 AS DECIMAL(10, 2)) AS [MB Written],
+CAST(100. * vfs.num_of_reads/(vfs.num_of_reads + vfs.num_of_writes) AS DECIMAL(10,1)) AS [# Reads Pct],
+CAST(100. * vfs.num_of_writes/(vfs.num_of_reads + vfs.num_of_writes) AS DECIMAL(10,1)) AS [# Write Pct],
+CAST(100. * vfs.num_of_bytes_read/(vfs.num_of_bytes_read + vfs.num_of_bytes_written) AS DECIMAL(10,1)) AS [Read Bytes Pct],
+CAST(100. * vfs.num_of_bytes_written/(vfs.num_of_bytes_read + vfs.num_of_bytes_written) AS DECIMAL(10,1)) AS [Written Bytes Pct]
+FROM sys.dm_io_virtual_file_stats(DB_ID(), NULL) AS vfs
+INNER JOIN sys.database_files AS df WITH (NOLOCK)
+ON vfs.[file_id]= df.[file_id]
+OPTION (RECOMPILE);
+
+-- This helps you characterize your workload better from an I/O perspective for this database
+-- It helps you determine whether you has an OLTP or DW/DSS type of workload
+
+
+-- Calculates average stalls per read, per write, and per total input/output for each database file  (Query 26) (IO Stalls by File)
+SELECT DB_NAME(fs.database_id) AS [Database Name], CONVERT(DECIMAL(18,2), mf.size/128.0) AS [File Size (MB)], 
+mf.physical_name, io_stall_read_ms, num_of_reads, CAST(io_stall_read_ms/(1.0 + num_of_reads) AS NUMERIC(10,1)) AS [avg_read_stall_ms],
+io_stall_write_ms, num_of_writes,CAST(io_stall_write_ms/(1.0+num_of_writes) AS NUMERIC(10,1)) AS [avg_write_stall_ms],
+io_stall_read_ms + io_stall_write_ms AS [io_stalls], num_of_reads + num_of_writes AS [total_io],
+CAST((io_stall_read_ms + io_stall_write_ms)/(1.0 + num_of_reads + num_of_writes) AS NUMERIC(10,1)) 
+AS [avg_io_stall_ms]
+FROM sys.dm_io_virtual_file_stats(null,null) AS fs
+INNER JOIN sys.master_files AS mf WITH (NOLOCK)
+ON fs.database_id = mf.database_id
+AND fs.[file_id] = mf.[file_id]
+ORDER BY avg_io_stall_ms DESC OPTION (RECOMPILE);
+
+-- Calculates average stalls per read, per write, and per total input/output for each Drive
+SELECT [Drive],
+	CASE 
+		WHEN num_of_reads = 0 THEN 0 
+		ELSE (io_stall_read_ms/num_of_reads) 
+	END AS [Read Latency],
+	CASE 
+		WHEN io_stall_write_ms = 0 THEN 0 
+		ELSE (io_stall_write_ms/num_of_writes) 
+	END AS [Write Latency],
+	CASE 
+		WHEN (num_of_reads = 0 AND num_of_writes = 0) THEN 0 
+		ELSE (io_stall/(num_of_reads + num_of_writes)) 
+	END AS [Overall Latency],
+	CASE 
+		WHEN num_of_reads = 0 THEN 0 
+		ELSE (num_of_bytes_read/num_of_reads) 
+	END AS [Avg Bytes/Read],
+	CASE 
+		WHEN io_stall_write_ms = 0 THEN 0 
+		ELSE (num_of_bytes_written/num_of_writes) 
+	END AS [Avg Bytes/Write],
+	CASE 
+		WHEN (num_of_reads = 0 AND num_of_writes = 0) THEN 0 
+		ELSE ((num_of_bytes_read + num_of_bytes_written)/(num_of_reads + num_of_writes)) 
+	END AS [Avg Bytes/Transfer]
+FROM (SELECT LEFT(mf.physical_name, 2) AS Drive, SUM(num_of_reads) AS num_of_reads,
+	         SUM(io_stall_read_ms) AS io_stall_read_ms, SUM(num_of_writes) AS num_of_writes,
+	         SUM(io_stall_write_ms) AS io_stall_write_ms, SUM(num_of_bytes_read) AS num_of_bytes_read,
+	         SUM(num_of_bytes_written) AS num_of_bytes_written, SUM(io_stall) AS io_stall
+      FROM sys.dm_io_virtual_file_stats(NULL, NULL) AS vfs
+      INNER JOIN sys.master_files AS mf WITH (NOLOCK)
+      ON vfs.database_id = mf.database_id AND vfs.file_id = mf.file_id
+      GROUP BY LEFT(mf.physical_name, 2)) AS tab
+ORDER BY [Overall Latency] OPTION (RECOMPILE);

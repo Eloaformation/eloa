@@ -1,0 +1,134 @@
+---------------------------------------Permet de savoir les Stats a jour---------------------------------------
+
+
+select A.name as table_name,b.name as Stats,c.name as Nom_index,
+stats_date (b.object_id, B.stats_id) as derniere_stats_a_jour
+from
+sys.indexes c
+inner join sys.stats b on b.object_id=c.object_id
+inner join sys.tables a on a.object_id=b.object_id
+order by derniere_stats_a_jour desc
+
+--------------------------------------------------------------------------
+
+DBCC SHOW_STATISTICS (N'statement', N'statement_member_link');
+GO
+-----------Voir le nombre de lignes qui a ete modifie sans que les stats ont ete mis a jour------------------
+
+SELECT * 
+FROM [sys].[dm_db_stats_properties] (OBJECT_ID(N'statement'), 2);
+GO 
+
+--------------------------------Stats a jour depuis quand + Nbre de lignes modifiés------------------------
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+--index stats
+SELECT
+       ss.name AS SchemaName
+       , st.name AS TableName
+       , s.name AS IndexName
+       , STATS_DATE(s.id,s.indid) AS 'Statistics Last Updated'
+       , s.rowcnt AS 'Row Count'
+       , s.rowmodctr AS 'Number Of Changes'
+       , CAST((CAST(s.rowmodctr AS DECIMAL(28,8))/CAST(s.rowcnt AS
+                    DECIMAL(28,2)) * 100.0)
+                           AS DECIMAL(28,2)) AS '% Rows Changed'
+FROM sys.sysindexes s
+INNER JOIN sys.tables st ON st.[object_id] = s.[id]
+INNER JOIN sys.schemas ss ON ss.[schema_id] = st.[schema_id]
+--inner join sys.stats sst on s.id=sst.object_id
+WHERE s.id > 100
+       AND s.indid > 0
+       AND s.rowcnt >= 500
+       --AND st.name in( 'Hubsimba')
+ORDER BY  SchemaName, TableName, IndexName
+
+
+------------------------------------Stats en double----------------------------------------------------
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+GO
+
+
+WITH    autostats ( object_id, stats_id, name, column_id ) 
+          AS ( SELECT   sys.stats.object_id , 
+                        sys.stats.stats_id , 
+                        sys.stats.name , 
+                        sys.stats_columns.column_id 
+               FROM     sys.stats 
+                        INNER JOIN sys.stats_columns ON sys.stats.object_id = sys.stats_columns.object_id 
+                                                        AND sys.stats.stats_id = sys.stats_columns.stats_id 
+               WHERE    sys.stats.auto_created = 1 
+                        AND sys.stats_columns.stats_column_id = 1 
+             ) 
+    SELECT  OBJECT_NAME(sys.stats.object_id) AS [Table] , 
+            sys.columns.name AS [Column] , 
+            sys.stats.name AS [Overlapped] , 
+            autostats.name AS [Overlapping] , 
+            'DROP STATISTICS [' + OBJECT_SCHEMA_NAME(sys.stats.object_id) 
+            + '].[' + OBJECT_NAME(sys.stats.object_id) + '].[' 
+            + autostats.name + ']' 
+    FROM    sys.stats 
+            INNER JOIN sys.stats_columns ON sys.stats.object_id = sys.stats_columns.object_id 
+                                            AND sys.stats.stats_id = sys.stats_columns.stats_id 
+            INNER JOIN autostats ON sys.stats_columns.object_id = autostats.object_id 
+                                    AND sys.stats_columns.column_id = autostats.column_id 
+            INNER JOIN sys.columns ON sys.stats.object_id = sys.columns.object_id 
+                                      AND sys.stats_columns.column_id = sys.columns.column_id 
+    WHERE   sys.stats.auto_created = 0 
+            AND sys.stats_columns.stats_column_id = 1 
+            AND sys.stats_columns.stats_id != autostats.stats_id 
+            AND OBJECTPROPERTY(sys.stats.object_id, 'IsMsShipped') = 0 
+
+------------------ Stats besoin d'etre MAJ apres la derniere modification des stats --------------------
+
+
+-- stats candidates à la mise à jour
+SELECT s.name AS TABLE_SCHEMA, o.name AS TABLE_NAME, i.name AS INDEX_NAME, st.name AS STAT_NAME,
+	   sp.last_updated, sp.modification_counter, rows
+FROM   sys.stats AS st
+       LEFT OUTER JOIN sys.indexes AS i
+	        ON st.object_id = i.object_id
+			   AND st.name = i.name
+       JOIN sys.objects AS o
+	        ON st.object_id = o.object_id
+       JOIN sys.schemas AS s
+	        ON o.schema_id = s.schema_id	
+       CROSS APPLY sys.dm_db_stats_properties (st.object_id, st.stats_id) AS sp
+WHERE  modification_counter > 0
+  AND  (last_updated < DATEADD(day, -3, GETDATE())
+        OR  rows / NULLIF(modification_counter, 0) > 0.2)
+  AND  rows > 500;
+
+
+-- mise à jour des statistiques
+DECLARE @SQL NVARCHAR(max);
+SET @SQL = N'';
+SELECT @SQL = @SQL + 'UPDATE STATISTICS ' + s.name +'.' + o.name + '(' + st.name +');'
+FROM   sys.stats AS st
+       LEFT OUTER JOIN sys.indexes AS i
+	        ON st.object_id = i.object_id
+			   AND st.name = i.name
+       JOIN sys.objects AS o
+	        ON st.object_id = o.object_id
+       JOIN sys.schemas AS s
+	        ON o.schema_id = s.schema_id	
+       CROSS APPLY sys.dm_db_stats_properties (st.object_id, st.stats_id) AS sp
+WHERE  modification_counter > 0
+  AND  (last_updated < DATEADD(day, -3, GETDATE())
+        OR  rows / NULLIF(modification_counter, 0) > 0.2)
+  AND  rows > 500
+  and o.name not like 'sys%'
+  and i.name  is null 
+;
+EXEC (@SQL);
+------------------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+

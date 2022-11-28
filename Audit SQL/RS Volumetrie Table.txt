@@ -1,0 +1,363 @@
+
+insert into #Suivi_Espace_table_CRM
+SELECT 
+t.NAME AS Tablename,SUM(a.total_pages) * 8 /1024 /1024 AS TotalSpaceGB,getdate()-1
+FROM [GroupeIdenticar_MSCRM].sys.tables t
+INNER JOIN [GroupeIdenticar_MSCRM].sys.indexes i ON t.OBJECT_ID = i.object_id
+INNER JOIN [GroupeIdenticar_MSCRM].sys.partitions p ON i.object_id = p.OBJECT_ID AND i.index_id = p.index_id
+INNER JOIN [GroupeIdenticar_MSCRM].sys.allocation_units a ON p.partition_id = a.container_id
+LEFT OUTER JOIN [GroupeIdenticar_MSCRM].sys.schemas s ON t.schema_id = s.schema_id
+WHERE t.NAME NOT LIKE 'dt%' 
+    AND t.is_ms_shipped = 0
+    AND i.OBJECT_ID > 255 
+	and t.NAME in('annotationbase','activitypointerbase','ActivityPartyBase','Attachment')
+	and   a.total_pages > 100000
+GROUP BY 
+    t.Name, s.Name
+ORDER BY 2 desc
+
+----------------------------------------Annotationbase--------------------------------------------------------
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='1' then 'janvier' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '1' then 'janvier' end is not null
+and Tablename='annotationbase'
+group by case when month(datedetaille) ='1' then 'janvier' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='2' then 'fevrier' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '2' then 'fevrier' end is not null
+and Tablename='annotationbase'
+group by case when month(datedetaille) ='2' then 'fevrier' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='3' then 'Mars' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '3' then 'Mars' end is not null
+and Tablename='annotationbase'
+group by case when month(datedetaille) ='3' then 'Mars' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='4' then 'Avril' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '4' then 'Avril' end is not null
+and Tablename='annotationbase'
+group by case when month(datedetaille) ='4' then 'Avril' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='5' then 'Mai' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '5' then 'Mai' end is not null
+and Tablename='annotationbase'
+group by case when month(datedetaille) ='5' then 'Mai' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='6' then 'Juin' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '6' then 'Juin' end is not null
+and Tablename='annotationbase'
+group by case when month(datedetaille) ='6' then 'Juin' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='7' then 'Juillet' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '7' then 'JuiLlet' end is not null
+and Tablename='annotationbase'
+group by case when month(datedetaille) ='7' then 'Juillet' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='8' then 'Aout' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '8' then 'Aout' end is not null
+and Tablename='annotationbase'
+group by case when month(datedetaille) ='8' then 'Aout' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='9' then 'Septembre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '9' then 'Septembre' end is not null
+and Tablename='annotationbase'
+group by case when month(datedetaille) ='9' then 'Septembre' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='10' then 'Octobre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '10' then 'Octobre' end is not null
+and Tablename='annotationbase'
+group by case when month(datedetaille) ='10' then 'Octobre' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='11' then 'Novembre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '11' then 'Novembre' end is not null
+and Tablename='annotationbase'
+group by case when month(datedetaille) ='11' then 'Novembre' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='12' then 'Decembre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '12' then 'Decembre' end is not null
+and Tablename='annotationbase'
+group by case when month(datedetaille) ='12' then 'Decembre' end,Tablename
+union all
+----------------------------------------activitypointerbase--------------------------------------------------------
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='1' then 'janvier' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '1' then 'janvier' end is not null
+and Tablename='activitypointerbase'
+group by case when month(datedetaille) ='1' then 'janvier' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='2' then 'fevrier' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '2' then 'fevrier' end is not null
+and Tablename='activitypointerbase'
+group by case when month(datedetaille) ='2' then 'fevrier' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='3' then 'Mars' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '3' then 'Mars' end is not null
+and Tablename='activitypointerbase'
+group by case when month(datedetaille) ='3' then 'Mars' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='4' then 'Avril' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '4' then 'Avril' end is not null
+and Tablename='activitypointerbase'
+group by case when month(datedetaille) ='4' then 'Avril' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='5' then 'Mai' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '5' then 'Mai' end is not null
+and Tablename='activitypointerbase'
+group by case when month(datedetaille) ='5' then 'Mai' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='6' then 'Juin' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '6' then 'Juin' end is not null
+and Tablename='activitypointerbase'
+group by case when month(datedetaille) ='6' then 'Juin' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='7' then 'Juillet' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '7' then 'JuiLlet' end is not null
+and Tablename='activitypointerbase'
+group by case when month(datedetaille) ='7' then 'Juillet' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='8' then 'Aout' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '8' then 'Aout' end is not null
+and Tablename='activitypointerbase'
+group by case when month(datedetaille) ='8' then 'Aout' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='9' then 'Septembre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '9' then 'Septembre' end is not null
+and Tablename='activitypointerbase'
+group by case when month(datedetaille) ='9' then 'Septembre' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='10' then 'Octobre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '10' then 'Octobre' end is not null
+and Tablename='activitypointerbase'
+group by case when month(datedetaille) ='10' then 'Octobre' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='11' then 'Novembre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '11' then 'Novembre' end is not null
+and Tablename='activitypointerbase'
+group by case when month(datedetaille) ='11' then 'Novembre' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='12' then 'Decembre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '12' then 'Decembre' end is not null
+and Tablename='activitypointerbase'
+group by case when month(datedetaille) ='12' then 'Decembre' end,Tablename
+
+union all
+------------------------------- ActivityPartyBase------------------------------------------------
+
+
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='1' then 'janvier' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '1' then 'janvier' end is not null
+and Tablename='ActivityPartyBase'
+group by case when month(datedetaille) ='1' then 'janvier' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='2' then 'fevrier' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '2' then 'fevrier' end is not null
+and Tablename='ActivityPartyBase'
+group by case when month(datedetaille) ='2' then 'fevrier' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='3' then 'Mars' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '3' then 'Mars' end is not null
+and Tablename='ActivityPartyBase'
+group by case when month(datedetaille) ='3' then 'Mars' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='4' then 'Avril' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '4' then 'Avril' end is not null
+and Tablename='ActivityPartyBase'
+group by case when month(datedetaille) ='4' then 'Avril' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='5' then 'Mai' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '5' then 'Mai' end is not null
+and Tablename='ActivityPartyBase'
+group by case when month(datedetaille) ='5' then 'Mai' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='6' then 'Juin' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '6' then 'Juin' end is not null
+and Tablename='ActivityPartyBase'
+group by case when month(datedetaille) ='6' then 'Juin' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='7' then 'Juillet' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '7' then 'JuiLlet' end is not null
+and Tablename='ActivityPartyBase'
+group by case when month(datedetaille) ='7' then 'Juillet' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='8' then 'Aout' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '8' then 'Aout' end is not null
+and Tablename='ActivityPartyBase'
+group by case when month(datedetaille) ='8' then 'Aout' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='9' then 'Septembre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '9' then 'Septembre' end is not null
+and Tablename='ActivityPartyBase'
+group by case when month(datedetaille) ='9' then 'Septembre' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='10' then 'Octobre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '10' then 'Octobre' end is not null
+and Tablename='ActivityPartyBase'
+group by case when month(datedetaille) ='10' then 'Octobre' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='11' then 'Novembre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '11' then 'Novembre' end is not null
+and Tablename='ActivityPartyBase'
+group by case when month(datedetaille) ='11' then 'Novembre' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='12' then 'Decembre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '12' then 'Decembre' end is not null
+and Tablename='ActivityPartyBase'
+group by case when month(datedetaille) ='12' then 'Decembre' end,Tablename
+
+---------------------------------------- Attachment--------------------------------------------------
+union all
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='1' then 'janvier' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '1' then 'janvier' end is not null
+and Tablename='Attachment'
+group by case when month(datedetaille) ='1' then 'janvier' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='2' then 'fevrier' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '2' then 'fevrier' end is not null
+and Tablename='Attachment'
+group by case when month(datedetaille) ='2' then 'fevrier' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='3' then 'Mars' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '3' then 'Mars' end is not null
+and Tablename='Attachment'
+group by case when month(datedetaille) ='3' then 'Mars' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='4' then 'Avril' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '4' then 'Avril' end is not null
+and Tablename='Attachment'
+group by case when month(datedetaille) ='4' then 'Avril' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='5' then 'Mai' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '5' then 'Mai' end is not null
+and Tablename='Attachment'
+group by case when month(datedetaille) ='5' then 'Mai' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='6' then 'Juin' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '6' then 'Juin' end is not null
+and Tablename='Attachment'
+group by case when month(datedetaille) ='6' then 'Juin' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='7' then 'Juillet' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '7' then 'JuiLlet' end is not null
+and Tablename='Attachment'
+group by case when month(datedetaille) ='7' then 'Juillet' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='8' then 'Aout' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '8' then 'Aout' end is not null
+and Tablename='Attachment'
+group by case when month(datedetaille) ='8' then 'Aout' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='9' then 'Septembre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '9' then 'Septembre' end is not null
+and Tablename='Attachment'
+group by case when month(datedetaille) ='9' then 'Septembre' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='10' then 'Octobre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '10' then 'Octobre' end is not null
+and Tablename='Attachment'
+group by case when month(datedetaille) ='10' then 'Octobre' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='11' then 'Novembre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '11' then 'Novembre' end is not null
+and Tablename='Attachment'
+group by case when month(datedetaille) ='11' then 'Novembre' end,Tablename
+union all 
+select Tablename,avg(totalspaceMB)as Espace_TAble,case when month(datedetaille) ='12' then 'Decembre' end as Mois
+ from Suivi_Espace_table_CRM
+where day(datedetaille) between 1 and 31
+and case when month(datedetaille) = '12' then 'Decembre' end is not null
+and Tablename='Attachment'
+group by case when month(datedetaille) ='12' then 'Decembre' end,Tablename
+
+drop table #Suivi_Espace_table_CRM

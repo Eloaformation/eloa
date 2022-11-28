@@ -1,0 +1,309 @@
+-- Combiné Lock + requete courante
+
+
+		SELECT s.*   
+FROM sys.dm_exec_sessions AS s  
+WHERE EXISTS   
+    (  
+    SELECT *   
+    FROM sys.dm_tran_session_transactions AS t  
+    WHERE t.session_id = s.session_id  
+    )  
+    AND NOT EXISTS   
+    (  
+    SELECT *   
+    FROM sys.dm_exec_requests AS r  
+    WHERE r.session_id = s.session_id  
+    );  
+
+
+SELECT [s_tst].[session_id],
+   [s_es].[login_name] AS [Login Name],
+   DB_NAME ([s_tdt].[database_id]) AS [Database],
+   [s_tdt].[database_transaction_begin_time] AS [Begin Time],
+   [s_tdt].[database_transaction_log_record_count] AS [Log Records],
+   [s_tdt].[database_transaction_log_bytes_used] AS [Log Bytes],
+   [s_tdt].[database_transaction_log_bytes_reserved] AS [Log Rsvd],
+   [s_est].[text] AS [Last T-SQL Text],
+   [s_eqp].[query_plan] AS [Last Plan]
+FROM sys.dm_tran_database_transactions [s_tdt]
+   JOIN sys.dm_tran_session_transactions [s_tst]
+      ON [s_tst].[transaction_id] = [s_tdt].[transaction_id]
+   JOIN sys.dm_exec_sessions [s_es]
+      ON [s_es].[session_id] = [s_tst].[session_id]
+   JOIN sys.dm_exec_connections [s_ec]
+      ON [s_ec].[session_id] = [s_tst].[session_id]
+   LEFT OUTER JOIN sys.dm_exec_requests [s_er]
+      ON [s_er].[session_id] = [s_tst].[session_id]
+   CROSS APPLY sys.dm_exec_sql_text ([s_ec].[most_recent_sql_handle]) AS [s_est]
+   OUTER APPLY sys.dm_exec_query_plan ([s_er].[plan_handle]) AS [s_eqp]
+--WHERE [s_tdt].[database_id] = DB_ID (N'SalesDB')
+ORDER BY [Begin Time] ASC;
+GO 
+
+
+-- Kill plusieurs Taches a la suite 
+
+declare @SQL varchar(255)
+SELECT @SQL=COALESCE(@SQL,'')+'Kill '+CAST(spid AS VARCHAR(10))+ ';'  
+FROM sys.sysprocesses  
+WHERE DBID=DB_ID('JADV1_PRE01') 
+print @SQL
+
+--------------------Renvoie les informations sur la file d'attente des tâches en attente de certaines ressources------------------------------
+
+
+SELECT dm_ws.wait_duration_ms,
+ dm_ws.wait_type,
+ dm_es.status,
+ dm_t.TEXT,
+ dm_qp.query_plan,
+ dm_ws.session_ID,
+ dm_es.cpu_time,
+ dm_es.memory_usage,
+ dm_es.logical_reads,
+ dm_es.total_elapsed_time,
+ dm_es.program_name,
+ DB_NAME(dm_r.database_id) DatabaseName,
+ -- Optional columns
+ dm_ws.blocking_session_id,
+ dm_r.wait_resource,
+ dm_es.login_name,
+ dm_r.command,
+ dm_r.last_wait_type
+ FROM sys.dm_os_waiting_tasks dm_ws
+ INNER JOIN sys.dm_exec_requests dm_r ON dm_ws.session_id = dm_r.session_id
+ INNER JOIN sys.dm_exec_sessions dm_es ON dm_es.session_id = dm_r.session_id
+ CROSS APPLY sys.dm_exec_sql_text (dm_r.sql_handle) dm_t
+ CROSS APPLY sys.dm_exec_query_plan (dm_r.plan_handle) dm_qp
+ WHERE dm_es.is_user_process = 1 
+ --and  DB_NAME(dm_r.database_id)='PLVV2_REC01'
+ GO
+
+------------------------Requete en cours sur le serveur ------------------------------
+
+
+select ER.session_id,ER.command ,EST.text,OT.context_switches_count, ER.cpu_time,EQP.query_plan,
+ES.login_name from sys.dm_os_tasks OT
+inner join sys.dm_exec_requests ER on ER.session_id =OT.session_id
+inner join sys.dm_exec_sessions ES on ES.session_id =OT.session_id
+cross apply sys.dm_exec_sql_text (ER.sql_handle) EST
+cross apply sys.dm_exec_query_plan (ER.plan_handle) EQP
+where ES.is_user_process =1
+and OT.task_state in ('RUNNING','RUNNABLE')
+and ER.session_id !=@@SPID
+---------------------------------- Qui est Sur la BDD ???????????------------------------------------------
+
+select spid, blocked,status, hostname, program_name, convert(sysname, rtrim(loginame)) as loginname
+,cmd, cpu, physical_io,  dbid, request_id from master.dbo.sysprocesses 
+where dbid=(SELECT DB_ID('ASRV1_REC01'))
+
+-- ----------------------------Voir les transactions sur la base 
+
+select r.session_id,T.text, R.Status, R.Command, DatabaseName = db_name(R.database_id) , 
+R.cpu_time, R.total_elapsed_time, R.percent_complete from 
+sys.dm_exec_requests R cross apply sys.dm_exec_sql_text(R.sql_handle) T 
+
+--- --------------------------Qui locke ? 
+
+select spid, blocked,status, hostname, program_name, convert(sysname, rtrim(loginame)) as loginname
+,cmd, cpu, physical_io,  dbid, request_id from master.dbo.sysprocesses where spid > 50
+and blocked <> 0
+
+ou avec la DMV sys.dm_tran_database_transactions
+
+SELECT [s_tst].[session_id],
+   [s_es].[login_name] AS [Login Name],
+   DB_NAME ([s_tdt].[database_id]) AS [Database],
+   [s_tdt].[database_transaction_begin_time] AS [Begin Time],
+   [s_tdt].[database_transaction_log_record_count] AS [Log Records],
+   [s_tdt].[database_transaction_log_bytes_used] AS [Log Bytes],
+   [s_tdt].[database_transaction_log_bytes_reserved] AS [Log Rsvd],
+   [s_est].[text] AS [Last T-SQL Text],
+   [s_eqp].[query_plan] AS [Last Plan]
+FROM sys.dm_tran_database_transactions [s_tdt]
+   JOIN sys.dm_tran_session_transactions [s_tst]
+      ON [s_tst].[transaction_id] = [s_tdt].[transaction_id]
+   JOIN sys.dm_exec_sessions [s_es]
+      ON [s_es].[session_id] = [s_tst].[session_id]
+   JOIN sys.dm_exec_connections [s_ec]
+      ON [s_ec].[session_id] = [s_tst].[session_id]
+   LEFT OUTER JOIN sys.dm_exec_requests [s_er]
+      ON [s_er].[session_id] = [s_tst].[session_id]
+   CROSS APPLY sys.dm_exec_sql_text ([s_ec].[most_recent_sql_handle]) AS [s_est]
+   OUTER APPLY sys.dm_exec_query_plan ([s_er].[plan_handle]) AS [s_eqp]
+WHERE [s_tdt].[database_id] = DB_ID (N'SalesDB')
+ORDER BY [Begin Time] ASC;
+GO 
+
+--------------- Combien y a til de transaction ouverte sur la BDD ??? -------
+
+		SELECT s.*   
+FROM sys.dm_exec_sessions AS s  
+WHERE EXISTS   
+    (  
+    SELECT *   
+    FROM sys.dm_tran_session_transactions AS t  
+    WHERE t.session_id = s.session_id  
+    )  
+    AND NOT EXISTS   
+    (  
+    SELECT *   
+    FROM sys.dm_exec_requests AS r  
+    WHERE r.session_id = s.session_id  
+    );  
+
+
+
+---------------------------Combien il y a d'user sur toutes les bases ? 
+
+SELECT d.[Name] AS Base, COUNT(CONVERT(SYSNAME, RTRIM(p.loginame))) AS Utilisateurs
+FROM master.dbo.sysprocesses p
+INNER JOIN master.dbo.sysdatabases d ON p.dbid = d.dbid and d.dbid >4
+GROUP BY d.[Name]
+ORDER BY d.[Name]
+
+------------------------------- Nb de cnx par user---------------------------------------
+
+SELECT B.login_name, A.client_net_address, NoOfConnections = COUNT(*) 
+FROM sys.dm_exec_connections A INNER JOIN sys.dm_exec_sessions B 
+ON A.session_id = B.session_id GROUP BY login_name, client_net_address
+
+
+
+--------------------------------Sp_who2 detaillé----------------------------
+
+select spid, blocked,last_batch,status, hostname, program_name, convert(sysname, rtrim(loginame)) as loginname
+,cmd, cpu, physical_io,  dbid, request_id from master.dbo.sysprocesses where spid > 50 and convert(sysname, rtrim(loginame)) like '%S_ISE_REC%'
+and blocked <> 0
+
+-- Following script find out which are the queries running currently on your server.
+
+SELECT sqltext.TEXT,
+req.session_id,
+req.status,
+req.command,
+req.cpu_time,
+req.total_elapsed_time
+FROM sys.dm_exec_requests req
+CROSS APPLY sys.dm_exec_sql_text(sql_handle) AS sqltext 
+
+--- traduire un sql handle 
+
+select * from sys.dm_exec_sql_text(0x02000000AF22281E546790F9C9ACFECAB12BD73CE70AE78C)
+
+----------------------------------------connaitre l'utilisateur connecte---------------------------------------
+
+SELECT 'L''utilisateur courant est : ' + SUSER_NAME()
+
+--------------------------------------Qui consomme le plus a l'instant T---------------------------
+
+create proc sp__cpu as 
+
+SELECT 
+     convert(char(4), spid) Spid, 
+     convert(char(4), blocked) Blk, 
+     convert(char(4), cpu) CPU, 
+          left(loginame,15) 'Users', 
+     left(hostname, 15) 'Host', 
+          left(db_name(dbid),15) DB, 
+          convert(char(20), cmd) Command, 
+     convert(char(12), program_name) Program , 
+     convert(char(10), status) Status 
+FROM master..sysprocesses 
+WHERE  spid <> @@spid 
+AND status not in ( 'BACKGROUND', 'sleeping') 
+ORDER BY cpu DESC 
+GO 
+GRANT execute on sp__cpu to public 
+GO 
+
+exec sp__cpu
+
+---------------------------------------Quand le serveur SQL a été redemarré---------------------------------------
+
+select sqlserver_start_time as RestartSQLServer from sys.dm_os_sys_info
+
+-------------------------------Recuperer les 10 requetes les plus couteuses ------------------------
+
+select top 20 S.text 'SQLtext', STAT.execution_count 'Plan reuse (total executions)', STAT.plan_generation_num 'Plans generations', 
+STAT.creation_time 'Last compile time',STAT.last_execution_time 'Last execution time',
+STAT.total_worker_time/1000 'Total CPU time (ms)', STAT.total_worker_time/1000/STAT.execution_count 'CPU time/exec (ms)',
+STAT.total_elapsed_time/1000 'Total Elapsed (ms)',  STAT.total_elapsed_time/1000/STAT.execution_count 'Total Elapsed/exec (ms)',
+STAT.total_logical_reads 'Total Logical Reads', STAT.total_logical_reads/STAT.execution_count 'Logical Reads/exec', 
+STAT.total_logical_writes 'Total Logical Writes', STAT.total_logical_writes/STAT.execution_count 'Logical Writes/exec', 
+P.query_plan 'Last query Plan'
+from sys.dm_exec_query_stats STAT with (NOLOCK)
+cross apply sys.dm_exec_sql_text(STAT.sql_handle) S
+cross apply sys.dm_exec_query_plan(STAT.plan_handle) P
+order by STAT.total_worker_time/1000 desc;
+GO
+
+-------------------------------- Attente en temps moyen ------------------------------------
+
+
+
+WITH [Waits] AS
+    (SELECT
+        [wait_type],
+        [wait_time_ms] / 1000.0 AS [WaitS],
+        ([wait_time_ms] - [signal_wait_time_ms]) / 1000.0 AS [ResourceS],
+        [signal_wait_time_ms] / 1000.0 AS [SignalS],
+        [waiting_tasks_count] AS [WaitCount],
+        100.0 * [wait_time_ms] / SUM ([wait_time_ms]) OVER() AS [Percentage],
+        ROW_NUMBER() OVER(ORDER BY [wait_time_ms] DESC) AS [RowNum]
+    FROM sys.dm_os_wait_stats
+    WHERE [wait_type] NOT IN (
+        N'BROKER_EVENTHANDLER',             N'BROKER_RECEIVE_WAITFOR',
+        N'BROKER_TASK_STOP',                N'BROKER_TO_FLUSH',
+        N'BROKER_TRANSMITTER',              N'CHECKPOINT_QUEUE',
+        N'CHKPT',                           N'CLR_AUTO_EVENT',
+        N'CLR_MANUAL_EVENT',                N'CLR_SEMAPHORE',
+        N'DBMIRROR_DBM_EVENT',              N'DBMIRROR_EVENTS_QUEUE',
+        N'DBMIRROR_WORKER_QUEUE',           N'DBMIRRORING_CMD',
+        N'DIRTY_PAGE_POLL',                 N'DISPATCHER_QUEUE_SEMAPHORE',
+        N'EXECSYNC',                        N'FSAGENT',
+        N'FT_IFTS_SCHEDULER_IDLE_WAIT',     N'FT_IFTSHC_MUTEX',
+        N'HADR_CLUSAPI_CALL',               N'HADR_FILESTREAM_IOMGR_IOCOMPLETION',
+        N'HADR_LOGCAPTURE_WAIT',            N'HADR_NOTIFICATION_DEQUEUE',
+        N'HADR_TIMER_TASK',                 N'HADR_WORK_QUEUE',
+        N'KSOURCE_WAKEUP',                  N'LAZYWRITER_SLEEP',
+        N'LOGMGR_QUEUE',                    N'ONDEMAND_TASK_QUEUE',
+        N'PWAIT_ALL_COMPONENTS_INITIALIZED',
+        N'QDS_PERSIST_TASK_MAIN_LOOP_SLEEP',
+        N'QDS_CLEANUP_STALE_QUERIES_TASK_MAIN_LOOP_SLEEP',
+        N'REQUEST_FOR_DEADLOCK_SEARCH',     N'RESOURCE_QUEUE',
+        N'SERVER_IDLE_CHECK',               N'SLEEP_BPOOL_FLUSH',
+        N'SLEEP_DBSTARTUP',                 N'SLEEP_DCOMSTARTUP',
+        N'SLEEP_MASTERDBREADY',             N'SLEEP_MASTERMDREADY',
+        N'SLEEP_MASTERUPGRADED',            N'SLEEP_MSDBSTARTUP',
+        N'SLEEP_SYSTEMTASK',                N'SLEEP_TASK',
+        N'SLEEP_TEMPDBSTARTUP',             N'SNI_HTTP_ACCEPT',
+        N'SP_SERVER_DIAGNOSTICS_SLEEP',     N'SQLTRACE_BUFFER_FLUSH',
+        N'SQLTRACE_INCREMENTAL_FLUSH_SLEEP',
+        N'SQLTRACE_WAIT_ENTRIES',           N'WAIT_FOR_RESULTS',
+        N'WAITFOR',                         N'WAITFOR_TASKSHUTDOWN',
+        N'WAIT_XTP_HOST_WAIT',              N'WAIT_XTP_OFFLINE_CKPT_NEW_LOG',
+        N'WAIT_XTP_CKPT_CLOSE',             N'XE_DISPATCHER_JOIN',
+        N'XE_DISPATCHER_WAIT',              N'XE_TIMER_EVENT')
+    AND [waiting_tasks_count] > 0
+ )
+SELECT
+    MAX ([W1].[wait_type]) AS [WaitType],
+    CAST (MAX ([W1].[WaitS]) AS DECIMAL (16,2)) AS [Wait_S],
+    CAST (MAX ([W1].[ResourceS]) AS DECIMAL (16,2)) AS [Resource_S],
+    CAST (MAX ([W1].[SignalS]) AS DECIMAL (16,2)) AS [Signal_S],
+    MAX ([W1].[WaitCount]) AS [WaitCount],
+    CAST (MAX ([W1].[Percentage]) AS DECIMAL (5,2)) AS [Percentage],
+    CAST ((MAX ([W1].[WaitS]) / MAX ([W1].[WaitCount])) AS DECIMAL (16,4)) AS [AvgWait_S],
+    CAST ((MAX ([W1].[ResourceS]) / MAX ([W1].[WaitCount])) AS DECIMAL (16,4)) AS [AvgRes_S],
+    CAST ((MAX ([W1].[SignalS]) / MAX ([W1].[WaitCount])) AS DECIMAL (16,4)) AS [AvgSig_S]
+FROM [Waits] AS [W1]
+INNER JOIN [Waits] AS [W2]
+    ON [W2].[RowNum] <= [W1].[RowNum]
+GROUP BY [W1].[RowNum]
+HAVING SUM ([W2].[Percentage]) - MAX ([W1].[Percentage]) < 95; -- percentage threshold
+GO
+
+
+

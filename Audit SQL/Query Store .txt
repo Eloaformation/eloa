@@ -1,0 +1,12 @@
+---------------------------------- Voir les requetes en cache -------------------------------
+
+select Q.query_id,qt.query_text_id,qt.query_sql_text,sum(rs.count_executions) as total_execution_count
+from sys.query_store_query_text as qt
+join sys.query_store_query as q
+on qt.query_text_id=Q.query_text_id
+join sys.query_store_plan as p
+on q.query_id=P.query_id
+join sys.query_store_runtime_stats as rs
+on P.plan_id=rs.plan_id
+group by Q.query_id,qt.query_text_id,qt.query_sql_text
+order by total_execution_count

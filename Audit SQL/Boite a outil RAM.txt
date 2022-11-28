@@ -1,0 +1,116 @@
+-------------------Quels ressources prend la requete a l'instant T------------------------
+
+select granted_memory_kb,used_memory_kb,max_used_memory_kb from sys.dm_exec_query_memory_grants
+where session_id= 
+
+------------------------------- Quels sont les plans qui prennent le plus de place sur la RAM--------------------------------------
+
+SELECT  TOP 6
+  LEFT([name], 20) as [name],
+  LEFT([type], 20) as [type],
+  [single_pages_kb] + [multi_pages_kb] AS cache_kb,
+  [entries_count]
+ FROM sys.dm_os_memory_cache_counters 
+order by single_pages_kb + multi_pages_kb DESC
+-et celle la aussi
+
+SELECT 
+	objtype AS 'Cached Object Type',
+	COUNT(*) AS 'Number of Plans',
+	SUM(CAST(size_in_bytes AS BIGINT))/1024/1024 AS 'Plan Cache Size (MB)',
+	AVG(usecounts) AS 'Avg Use Count'
+FROM sys.dm_exec_cached_plans
+GROUP BY objtype
+ORDER BY 'Plan Cache Size (MB)' DESC
+--Note
+/*
+CACHESTORE_OBJCP :CACHESTORE_OBJCP are compiled plans for stored procedures, functions and triggers. 
+CACHESTORE_SQLCP :are cached SQL statements or batches that aren't in stored procedures, functions and triggers.  
+This includes any dynamic SQL or raw SELECT statements sent to the server. 
+Generally you will find that CACHESTORE_SQLCP > CACHESTORE_OBJCP , but if the ratio of one to another 
+is very high then we can say that there are more adhoc plans being run then Stored procedures.
+ That is the reason the sal statements are going in to  Plan cache.
+
+-----------------------------------------Quel Table prend le plus de place dans le buffer pool --------------------------
+
+
+SELECT TOP 25 
+ obj.[name],
+  i.[name],
+  i.[type_desc],
+  count(*)AS Buffered_Page_Count ,
+  count(*) * 8192 / (1024 * 1024) as Buffer_MB
+     -- ,obj.name ,obj.index_id, i.[name]
+ FROM sys.dm_os_buffer_descriptors AS bd 
+    INNER JOIN 
+    (
+         SELECT object_name(object_id) AS name 
+            ,index_id ,allocation_unit_id, object_id
+         FROM sys.allocation_units AS au
+             INNER JOIN sys.partitions AS p 
+                ON au.container_id = p.hobt_id 
+                    AND (au.type = 1 OR au.type = 3)
+         UNION ALL
+         SELECT object_name(object_id) AS name   
+            ,index_id, allocation_unit_id, object_id
+         FROM sys.allocation_units AS au
+             INNER JOIN sys.partitions AS p 
+                ON au.container_id = p.hobt_id 
+                    AND au.type = 2
+     ) AS obj 
+        ON bd.allocation_unit_id = obj.allocation_unit_id
+ LEFT JOIN sys.indexes i on i.object_id = obj.object_id AND i.index_id = obj.index_id
+ WHERE database_id = db_id()
+ GROUP BY obj.name, obj.index_id , i.[name],i.[type_desc]
+ ORDER BY Buffered_Page_Count DESC
+
+-----------------------------------Taille du buffer pool -----------------------------
+
+select count(*) AS Buffered_Page_Count
+  ,count(*) * 8192 / (1024 * 1024) as Buffer_Pool_MB
+ from sys.dm_os_buffer_descriptors
+
+-----------------------------------Quels BDD prend le plus en buffer pool -----------------------------
+
+SELECT LEFT(CASE database_id 
+   WHEN 32767 THEN 'ResourceDb' 
+   ELSE db_name(database_id) 
+        END, 20) AS Database_Name,
+  count(*)AS Buffered_Page_Count, 
+ count(*) * 8192 / (1024 * 1024) as Buffer_Pool_MB
+ FROM sys.dm_os_buffer_descriptors
+ GROUP BY db_name(database_id) ,database_id
+ ORDER BY Buffered_Page_Count DESC
+
+
+-------------------------------------------Table en Memoire les plus utilisés--------------------------------
+
+wITH BufferAllocation AS (
+SELECT object_id
+,index_id
+,allocation_unit_id
+FROM sys.allocation_units AS au
+INNER JOIN sys.partitions AS p ON au.container_id = p.hobt_id AND (au.type = 1 OR au.type = 3)
+UNION ALL
+
+SELECT object_id
+,index_id
+,allocation_unit_id
+FROM sys.allocation_units AS au
+INNER JOIN sys.partitions AS p ON au.container_id = p.hobt_id AND au.type = 2
+)
+SELECT t.name
+,i.name
+,i.type_desc
+,COUNT(*) AS Buffered_Page_Count
+,CAST(COUNT(*) * 8 / 1024.0 AS NUMERIC(10,2)) AS Buffer_MB
+FROM sys.tables t
+INNER JOIN BufferAllocation ba ON t.object_id = ba.object_id
+LEFT JOIN sys.indexes i ON ba.object_id = i.object_id AND ba.index_id = i.index_id
+INNER JOIN sys.dm_os_buffer_descriptors bd ON ba.allocation_unit_id = bd.allocation_unit_id
+WHERE bd.database_id = DB_ID()
+GROUP BY t.name
+,i.index_id
+,i.name
+,i.type_desc
+ORDER BY Buffered_Page_Count DESC
