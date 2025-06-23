@@ -1,0 +1,12 @@
+SELECT TOP 100 
+TableName = OBJECT_NAME(ius.[object_id]),
+IndexName = i.name,
+i.indid,
+CAST((8* i.reserved)/1024 AS VARCHAR)AS [Taille en Mo],i.rows,
+          [user_updates] ,[user_seeks] ,[user_scans] ,[last_user_seek] ,[last_user_scan]
+    FROM sysindexes i
+    INNER JOIN sys.dm_db_index_usage_stats ius ON i.id = ius.object_id AND i.indid = ius.index_id
+    WHERE i.dpages > 0 AND 
+          ( ius.user_seeks > 2 OR
+            ius.user_scans > 2 )
+    ORDER BY i.dpages DESC

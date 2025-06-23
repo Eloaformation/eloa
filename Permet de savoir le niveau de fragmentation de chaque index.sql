@@ -1,0 +1,27 @@
+SELECT DB_NAME(IUS.database_id) DB, 
+            OBJECT_NAME(IUS.object_id) TABLES,
+            IDX.NAME IndexName,
+            CAST(IPS.avg_fragmentation_in_percent AS NUMERIC(5,2)) Frag,
+            CAST(IPS.avg_page_space_used_in_percent AS NUMERIC(5,2)) PgUsage,
+            IPS.page_count Pg,
+            IDX.fill_factor,
+            IUS.user_seeks,
+            IUS.user_scans,
+            IUS.last_user_scan,
+            IUS.last_user_seek,
+            IUS.user_lookups,
+            IUS.last_user_lookup,
+            IDX.is_hypothetical,
+            IDX.is_padded
+FROM sys.dm_db_index_usage_stats IUS
+JOIN sys.indexes IDX ON IUS.object_id = IDX.object_id
+                             AND IUS.index_id = IDX.index_id
+JOIN sys.dm_db_index_physical_stats(DB_ID(), OBJECT_ID(NULL), NULL, NULL, 'SAMPLED')IPS
+      ON IUS.object_id = IPS.object_id
+      AND IUS.index_id = IPS.index_id
+WHERE OBJECT_NAME(IUS.object_id) NOT LIKE 'sys%'
+AND IPS.index_id > 0
+and  IDX.NAME like '%dif_atp_Id_FK%'
+
+DBCC SHOW_STATISTICS ( 'dif_Diffusion', dif_atp_id_FK)
+

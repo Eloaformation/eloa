@@ -1,0 +1,42 @@
+--Creating a Covering Index for an XML column
+--NOTE: This technique isn't to be used lightly!
+
+--here's a simple query that generates a bookmark lookup because
+--the column Demographics is not in the index we're using for lastname
+select FirstName, LastName, Demographics from person.person
+where
+	LastName= 'duffy'
+	
+--can we add the column and remove the lookup? No!
+
+--so, XML can't be part of the index OR an included column. Time to go around!
+--We'll create a copy as varchar(max), note that I didn't mark it as persisted.
+ALTER TABLE Person.Person ADD
+	Demographics2  AS convert(varchar(max), Demographics)
+
+--remove the index
+DROP INDEX [IX_Person_LastName_FirstName_MiddleName] ON [Person].[Person]
+GO
+
+--create again, this time with our new column
+CREATE NONCLUSTERED INDEX [IX_Person_LastName_FirstName_MiddleName] ON [Person].[Person] 
+(
+	[LastName] ASC,
+	[FirstName] ASC,
+	[MiddleName] ASC
+)
+INCLUDE ( [Demographics2])
+GO
+
+--almost same query, uses our new computed column, bye bye lookup!
+select FirstName, LastName, Demographics2 from person.person
+where
+	LastName= 'duffy'
+
+--Recap: On my machine this reduces the query from 9 reads to 3, with almost no
+--change in duration. It might make sense to do this if you:
+----a. Run this query a LOT
+----b. Are doing a lot more lookups (rows) per query
+--The tradeoff is you're making a copy of the XML column just to make this work. 
+--Another alternative, not recommended, would be to change the column type to
+--varchar(max), but that means giving up all the XML extras (typing, indexes)

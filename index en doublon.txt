@@ -1,0 +1,23 @@
+declare @Index table (object_id int, index_id int, name sysname, colonnes varchar(max) DEFAULT '')   
+declare @id1 int, @id2 int, @id3 int   
+-- Initialisation 
+insert into @Index (object_id,index_id,name)     
+select i.object_id,i.index_id,i.name     from sys.indexes i     
+where index_id>0   
+-- Liste des colonnes des index 
+DECLARE ind CURSOR FOR  SELECT ic.object_id,ic.index_id,ic.column_id FROM sys.index_columns ic 
+where key_ordinal>0 order by ic.key_ordinal   
+OPEN ind FETCH NEXT FROM ind INTO @id1,@id2,@id3   
+WHILE @@FETCH_STATUS = 0 BEGIN       update @Index     
+set colonnes+=convert(varchar(max),@id3)+','     
+where object_id=@id1 and index_id=@id2      
+ FETCH NEXT FROM ind INTO @id1,@id2,@id3 END   
+ CLOSE ind DEALLOCATE ind  
+  -- Détection des doublons 
+  select distinct QUOTENAME(s.name)+'.'+QUOTENAME(t.name) as [Table],                 
+   QUOTENAME(contenant.name) as [Index contenant],                  
+   QUOTENAME(contenu.name) as [Index contenu]  from @Index contenant 
+   join @Index contenu on contenant.object_id=contenu.object_id                     
+   and contenant.index_id<>contenu.index_id                     
+   and contenant.colonnes like contenu.colonnes+'%' 
+   join sys.tables t on t.object_id=contenu.object_id join sys.schemas s on s.schema_id=t.schema_id 
